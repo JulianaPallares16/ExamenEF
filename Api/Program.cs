@@ -3,16 +3,55 @@ using Api.Helpers.Errors;
 using Application.Abstractions;
 using Infrastructure.Persistence;
 using Infrastructure.Persistence.Repositories;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
-using System.Reflection;
+using System.Reflection; 
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("readCommon", HttpContext =>
+    RateLimitPartition.GetFixedWindowLimiter(
+        partitionKey: GetPartitionKey(HttpContext), factory: _ =>
+        new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 50,
+            Window = TimeSpan.FromMinutes(1),
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            QueueLimit = 0
+        }));
+    options.AddPolicy("writeByRole", HttpContext =>
+    {
+        var role =
+        GetUserRole(HttpContext);
+        var options = role switch
+        {
+            "Admin" =>
+            new FixedWindowRateLimiter
+            {
+                Permitlimit = 20,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            },
+            "Recepcionista" =>
+            new FixedWindowRateLimiter
+            {
+                Permitlimit = 5,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            },
+        }
+    }
+};
+);
+    
 
 // Add services to the container.
 builder.Services.AddControllers();
 
-// 🔥 REEMPLAZAR AddOpenApi() por Swagger completo
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -56,7 +95,6 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 
-    // 📝 Incluir comentarios XML de los controllers
     var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     
@@ -65,10 +103,8 @@ builder.Services.AddSwaggerGen(options =>
         options.IncludeXmlComments(xmlPath);
     }
 
-    // 🏷️ Habilitar anotaciones Swagger
     options.EnableAnnotations();
 
-    // 📊 Ordenar endpoints alfabéticamente
     options.OrderActionsBy(apiDesc => $"{apiDesc.ActionDescriptor.RouteValues["controller"]}_{apiDesc.HttpMethod}");
 });
 
@@ -105,7 +141,6 @@ builder.Services.AddScoped<IAuditoriaRepository, AuditoriaRepository>();
 
 var app = builder.Build();
 
-// 🔥 MIDDLEWARE DE SWAGGER (siempre disponible, no solo en Development)
 app.UseSwagger();
 app.UseSwaggerUI(options =>
 {
@@ -119,13 +154,6 @@ app.UseSwaggerUI(options =>
 // Tus middlewares existentes
 app.UseMiddleware<ExceptionMiddleware>();
 await app.SeedRolesAsync();
-
-// Configure the HTTP request pipeline.
-// ❌ ELIMINAR esto ya que ahora usamos Swagger UI completo
-// if (app.Environment.IsDevelopment())
-// {
-//     app.MapOpenApi();
-// }
 
 app.UseCors("CorsPolicy");
 app.UseCors("CorsPolicyUrl");
